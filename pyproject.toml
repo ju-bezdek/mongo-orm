@@ -1,0 +1,45 @@
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "mongo-orm"
+version = "0.1.0"
+description = "A MongoDB ORM for Python"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+packages = [{include = "mongo_orm", from = "src"}]
+
+[tool.poetry.dependencies]
+python = ">=3.9,<4.0"
+pymongo = "^4.13.2"
+motor = "^3.7.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.0"
+pytest-cov = "^4.0"
+black = "^23.0"
+isort = "^5.0"
+flake8 = "^6.0"
+mypy = "^1.0"
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--cov=src/mongo_orm --cov-report=term-missing"
