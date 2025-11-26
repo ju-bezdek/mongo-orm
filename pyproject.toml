@@ -3,7 +3,7 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
-name = "mongo-orm"
+name = "mongo-entity-orm"
 version = "0.1.0"
 description = "A MongoDB ORM for Python"
 readme = "README.md"
