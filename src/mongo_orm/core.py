@@ -6,15 +6,20 @@ import logging
 from collections import deque
 import os
 from typing import (
+    Any,
     AsyncIterator,
     Awaitable,
     Callable,
+    Dict,
     Generator,
     Iterable,
     List,
+    Optional,
+    Tuple,
     Type,
     TypeVar,
     TypedDict,
+    Union,
 )
 from uuid import NAMESPACE_URL, uuid4, uuid5
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
@@ -34,6 +39,10 @@ class Config:
     def MONGO_DATABASE_NAME():
         return os.environ.get("MONGO_DATABASE_NAME", None)
 
+    @staticmethod
+    def MONGODB_INDEX_AUTOAPPLY():
+        return os.environ.get("MONGODB_INDEX_AUTOAPPLY", "never")
+
 
 def encode_tenant_id(tenant_id, id):
     return str(uuid5(NAMESPACE_URL, f"{id}/{tenant_id}"))
@@ -45,6 +54,7 @@ class SaveResult(TypedDict):
 
 
 class Repository:
+    all_entities: List[Type["BaseEntity"]] = []
 
     def __init__(self, mongo_db: MongoDatabase = None) -> None:
         if mongo_db:
@@ -68,6 +78,33 @@ REPOSITORY = Repository()
 
 
 T = TypeVar("T", bound="BaseEntity")
+Keys = Union[
+    str,
+    List[Union[str, Tuple[str, int]]],
+    Dict[str, int],
+]
+
+
+class IndexSpec(TypedDict, total=False):
+    """
+    Typed dict describing a MongoDB index.
+
+    Examples:
+      {"keys": "email", "unique": True}
+      {"keys": [("tenant_id", 1), ("created_at", -1)], "name": "tenant_created_idx"}
+      {"keys": {"email": 1}, "unique": True}
+    """
+
+    keys: Keys
+    # Optional index options
+    unique: bool
+    sparse: bool
+    background: bool
+    name: str
+    expireAfterSeconds: int
+    expire_after_seconds: int  # alias
+    partialFilterExpression: Dict[str, Any]
+    weights: Dict[str, int]
 
 
 class BaseEntity(BaseModel):
@@ -80,6 +117,8 @@ class BaseEntity(BaseModel):
     _is_deleted: bool = PrivateAttr(False)
     _loaded_at: datetime.datetime | None = PrivateAttr(None)
     _tracked_fields_state: dict | None = PrivateAttr(None)
+
+    __indexes__: Optional[List[IndexSpec]] = None
 
     def __init__(self, **data) -> None:
         if not hasattr(self.__class__, "collection"):
@@ -556,6 +595,13 @@ def entity(
             cls.has_id = False
 
         cls.version_field = version_field
+
+        if cls not in REPOSITORY.all_entities:
+            REPOSITORY.all_entities.append(cls)
+
+        from .utils import apply_indexes
+
+        apply_indexes(cls)
 
         return cls
 
