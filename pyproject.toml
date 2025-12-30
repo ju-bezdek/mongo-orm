@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "mongo-entity-orm"
-version = "0.1.0"
+version = "0.1.1"
 description = "A MongoDB ORM for Python"
 readme = "README.md"
 authors = ["Juraj Bezdek <juraj.bezdek@gmail.com>"]

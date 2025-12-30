@@ -7,3 +7,4 @@ build/
 .vscode/
 .venv/
 .pypirc
+_*.md
