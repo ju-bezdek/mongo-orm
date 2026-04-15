@@ -309,7 +309,7 @@ class BaseEntity(BaseModel):
                 )
 
     @classmethod
-    def delete_by_id(cls, id, tenant_id: str):
+    def delete_by_id(cls, id, tenant_id: str = "*") -> bool:
 
         filter = {"_id": id}
         if tenant_id != "*":
@@ -321,7 +321,7 @@ class BaseEntity(BaseModel):
     def get(
         cls: Type[T],
         id: str,
-        tenant_id: str,
+        tenant_id: str = "*",
         namespace: str = None,
         raise_not_found: bool = False,
     ) -> T | None:
@@ -342,7 +342,7 @@ class BaseEntity(BaseModel):
     async def aget(
         cls: Type[T],
         id: str,
-        tenant_id: str,
+        tenant_id: str = "*",
         namespace: str = None,
         raise_not_found: bool = False,
     ) -> T | None:
@@ -378,7 +378,7 @@ class BaseEntity(BaseModel):
         return entity
 
     @classmethod
-    def count(cls, tenant_id: str, filter: dict = None, limit=None) -> int:
+    def count(cls, tenant_id: str = "*", filter: dict = None, limit=None) -> int:
 
         if not filter:
             _filter = {}
@@ -394,7 +394,7 @@ class BaseEntity(BaseModel):
         return cls.collection.count_documents(_filter, **extra)
 
     @classmethod
-    async def acount(cls, tenant_id: str, filter: dict = None, limit=None) -> int:
+    async def acount(cls, tenant_id: str = "*", filter: dict = None, limit=None) -> int:
 
         if not filter:
             _filter = {}
@@ -412,7 +412,7 @@ class BaseEntity(BaseModel):
     @classmethod
     async def afind(
         cls: Type[T],
-        tenant_id: str,
+        tenant_id: str = "*",
         namespace: str = None,
         skip: int = 0,
         limit: int = 100,
@@ -422,8 +422,10 @@ class BaseEntity(BaseModel):
     ) -> List[T]:
         if not filter:
             filter = {}
+        else:
+            filter = {**filter}
         if tenant_id != "*":
-            filter.update({"tenant_id": tenant_id, **additional_filters})
+            filter.update({"tenant_id": tenant_id})
 
         filter.update(additional_filters)
         if "id" in filter:
@@ -454,7 +456,7 @@ class BaseEntity(BaseModel):
     @classmethod
     def scroll_pages(
         cls: Type[T],
-        tenant_id: str,
+        tenant_id: str = "*",
         filter: dict = None,
         order_by: str = None,
         page_size: int = 100,
@@ -476,7 +478,7 @@ class BaseEntity(BaseModel):
     @classmethod
     async def ascroll_pages(
         cls: Type[T],
-        tenant_id: str,
+        tenant_id: str = "*",
         filter: dict = None,
         order_by: str = None,
         page_size: int = 100,
@@ -498,7 +500,7 @@ class BaseEntity(BaseModel):
     @classmethod
     def find(
         cls: Type[T],
-        tenant_id: str,
+        tenant_id: str = "*",
         namespace: str = None,
         skip: int = 0,
         limit: int | None = 100,
@@ -511,7 +513,7 @@ class BaseEntity(BaseModel):
         else:
             filter = {**filter}
         if tenant_id != "*":
-            filter.update({"tenant_id": tenant_id, **additional_filters})
+            filter.update({"tenant_id": tenant_id})
 
         filter.update(additional_filters)
         if "id" in filter:
@@ -544,13 +546,15 @@ class BaseEntity(BaseModel):
         return res
 
     @classmethod
-    def find_first(cls, tenant_id, filter=None, order_by=None, **kwargs):
+    def find_first(cls, tenant_id: str = "*", filter=None, order_by=None, **kwargs):
         kwargs.pop("limit", None)
         items = cls.find(tenant_id, filter=filter, order_by=order_by, limit=1, **kwargs)
         return items[0] if items else None
 
     @classmethod
-    async def afind_first(cls, tenant_id, filter=None, order_by=None, **kwargs):
+    async def afind_first(
+        cls, tenant_id: str = "*", filter=None, order_by=None, **kwargs
+    ):
         items = await cls.afind(
             tenant_id, filter=filter, order_by=order_by, limit=1, **kwargs
         )
