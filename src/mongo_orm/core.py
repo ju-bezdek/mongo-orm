@@ -60,18 +60,26 @@ class Repository:
         if mongo_db:
             self.mongo_db = mongo_db
         else:
+            mongodb_uri = Config.MONGODB_URI()
+            mongo_db_name = Config.MONGO_DATABASE_NAME()
+            if not mongodb_uri and not mongo_db_name:
+                raise ValueError(
+                    "MONGODB_URI and MONGO_DATABASE_NAME environment variables are not set"
+                )
+            if not mongodb_uri:
+                raise ValueError("MONGODB_URI environment variable is not set")
+            if not mongo_db_name:
+                raise ValueError("MONGO_DATABASE_NAME environment variable is not set")
 
             self.mongo_client = MongoClient(
-                Config.MONGODB_URI(), tlsAllowInvalidCertificates=True
+                mongodb_uri, tlsAllowInvalidCertificates=True
             )
             self.async_mongo_client = AsyncIOMotorClient(
-                Config.MONGODB_URI(), tls=True, tlsAllowInvalidCertificates=True
+                mongodb_uri, tls=True, tlsAllowInvalidCertificates=True
             )
             self.mongo_client.admin.command("ping")
-            self.mongo_db = self.mongo_client[str(Config.MONGO_DATABASE_NAME())]
-            self.async_mongo_db = self.async_mongo_client[
-                str(Config.MONGO_DATABASE_NAME())
-            ]
+            self.mongo_db = self.mongo_client[str(mongo_db_name)]
+            self.async_mongo_db = self.async_mongo_client[str(mongo_db_name)]
 
 
 REPOSITORY = Repository()

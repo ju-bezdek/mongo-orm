@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "mongo-entity-orm"
-version = "0.1.1"
+version = "0.1.2"
 description = "A MongoDB ORM for Python"
 readme = "README.md"
 authors = ["Juraj Bezdek <juraj.bezdek@gmail.com>"]
@@ -12,7 +12,7 @@ license = "MIT"
 packages = [{include = "mongo_orm", from = "src"}]
 keywords = ["mongodb", "orm", "mongo", "async"]
 homepage = "https://github.com/ju-bezdek/mongo-orm"
-repository = "https://github.com/ju-bezdek/mongo"
+repository = "https://github.com/ju-bezdek/mongo-orm"
 
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -25,8 +25,8 @@ classifiers = [
 ]
 
 [tool.poetry.urls]
-Repository = "https://github.com/ju-bezdek/mongo"
-Documentation = "https://github.com/ju-bezdek/mongo#readme"
+Repository = "https://github.com/ju-bezdek/mongo-orm"
+Documentation = "https://github.com/ju-bezdek/mongo-orm#readme"
 
 [tool.poetry.dependencies]
 python = ">=3.9,<4.0"
