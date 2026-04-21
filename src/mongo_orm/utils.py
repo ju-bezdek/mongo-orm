@@ -17,11 +17,11 @@ def _get_index_hash(collection_name: str, spec: "IndexSpec") -> str:
     # Normalize keys to a stable tuple representation
     if isinstance(keys, dict):
         # Keep order as provided in dict
-        norm_keys = tuple((str(k), float(v)) for k, v in keys.items())
+        norm_keys = tuple((str(k), str(v)) for k, v in keys.items())
     elif isinstance(keys, list):
-        norm_keys = tuple((str(k), float(v)) for k, v in keys)
+        norm_keys = tuple((str(k), str(v)) for k, v in keys)
     else:
-        norm_keys = ((str(keys), 1.0),)
+        norm_keys = ((str(keys), "1.0"),)
 
     # Create a stable representation of the spec including important options
     relevant_parts = {
@@ -48,10 +48,10 @@ def index_exists(collection: Collection, spec: "IndexSpec") -> bool:
     elif isinstance(keys, list):
         target_key = keys
     else:
-        target_key = [(keys, 1)]
+        target_key = [(keys, "1.0")]
 
-    # Normalize values to floats for comparison
-    target_key = [(str(k), float(v)) for k, v in target_key]
+    # Normalize values to strings for comparison
+    target_key = [(str(k), str(v)) for k, v in target_key]
 
     existing_indexes = collection.index_information()
 
@@ -59,9 +59,9 @@ def index_exists(collection: Collection, spec: "IndexSpec") -> bool:
         # info['key'] can be a list of tuples or a SON/dict object
         raw_existing_key = info["key"]
         if hasattr(raw_existing_key, "items"):
-            existing_key = [(str(k), float(v)) for k, v in raw_existing_key.items()]
+            existing_key = [(str(k), str(v)) for k, v in raw_existing_key.items()]
         else:
-            existing_key = [(str(k), float(v)) for k, v in raw_existing_key]
+            existing_key = [(str(k), str(v)) for k, v in raw_existing_key]
 
         if existing_key == target_key:
             return True
