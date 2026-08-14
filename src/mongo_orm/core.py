@@ -44,6 +44,23 @@ class Config:
         return os.environ.get("MONGODB_INDEX_AUTOAPPLY", "never")
 
 
+# BSON stores a date as UTC milliseconds with no offset, so pymongo hands back
+# naive datetimes unless asked otherwise. Entities compare their timestamps
+# against an aware now(), and naive-vs-aware comparison raises TypeError, so
+# every client reads dates back as UTC-aware.
+_CLIENT_KWARGS = dict(tlsAllowInvalidCertificates=True, tz_aware=True)
+
+
+def _build_sync_client(uri: str) -> MongoClient:
+    # TLS is inferred from the URI (mongodb+srv:// / ?tls=true); we only relax
+    # certificate validation. Keeps plain mongodb://localhost working.
+    return MongoClient(uri, **_CLIENT_KWARGS)
+
+
+def _build_async_client(uri: str) -> AsyncIOMotorClient:
+    return AsyncIOMotorClient(uri, **_CLIENT_KWARGS)
+
+
 def encode_tenant_id(tenant_id, id):
     return str(uuid5(NAMESPACE_URL, f"{id}/{tenant_id}"))
 
@@ -57,29 +74,79 @@ class Repository:
     all_entities: List[Type["BaseEntity"]] = []
 
     def __init__(self, mongo_db: MongoDatabase = None) -> None:
-        if mongo_db:
-            self.mongo_db = mongo_db
-        else:
-            mongodb_uri = Config.MONGODB_URI()
-            mongo_db_name = Config.MONGO_DATABASE_NAME()
-            if not mongodb_uri and not mongo_db_name:
-                raise ValueError(
-                    "MONGODB_URI and MONGO_DATABASE_NAME environment variables are not set"
-                )
-            if not mongodb_uri:
-                raise ValueError("MONGODB_URI environment variable is not set")
-            if not mongo_db_name:
-                raise ValueError("MONGO_DATABASE_NAME environment variable is not set")
+        # Nothing connects here. Clients are created lazily on first use so that
+        # importing the package / decorating entities has no network or env
+        # side effects (e.g. before load_dotenv() has run).
+        self._mongo_db = mongo_db
+        self._mongo_client = None
+        # One async client per running event loop. A motor client binds to the
+        # loop it first runs on, so it must not be reused across loops.
+        self._async_clients = {}
 
-            self.mongo_client = MongoClient(
-                mongodb_uri, tlsAllowInvalidCertificates=True
+    def _connect_sync(self) -> None:
+        if self._mongo_client is not None:
+            return
+        mongodb_uri = Config.MONGODB_URI()
+        mongo_db_name = Config.MONGO_DATABASE_NAME()
+        if not mongodb_uri and not mongo_db_name:
+            raise ValueError(
+                "MONGODB_URI and MONGO_DATABASE_NAME environment variables are not set"
             )
-            self.async_mongo_client = AsyncIOMotorClient(
-                mongodb_uri, tls=True, tlsAllowInvalidCertificates=True
-            )
-            self.mongo_client.admin.command("ping")
-            self.mongo_db = self.mongo_client[str(mongo_db_name)]
-            self.async_mongo_db = self.async_mongo_client[str(mongo_db_name)]
+        if not mongodb_uri:
+            raise ValueError("MONGODB_URI environment variable is not set")
+        if not mongo_db_name:
+            raise ValueError("MONGO_DATABASE_NAME environment variable is not set")
+
+        self._mongo_client = _build_sync_client(mongodb_uri)
+        self._mongo_client.admin.command("ping")
+        self._mongo_db = self._mongo_client[str(mongo_db_name)]
+
+    @property
+    def mongo_db(self) -> MongoDatabase:
+        if self._mongo_db is None:
+            self._connect_sync()
+        return self._mongo_db
+
+    @property
+    def mongo_client(self) -> MongoClient:
+        # If a db was injected, reuse its client instead of connecting via env.
+        if self._mongo_client is None and self._mongo_db is not None:
+            return self._mongo_db.client
+        if self._mongo_client is None:
+            self._connect_sync()
+        return self._mongo_client
+
+    def get_async_client(self) -> AsyncIOMotorClient:
+        loop = asyncio.get_running_loop()
+        client = self._async_clients.get(loop)
+        if client is None:
+            # Drop clients whose loop has been closed (e.g. between asyncio.run
+            # calls or pytest cases) so the cache doesn't grow unbounded.
+            for dead in [l for l in list(self._async_clients) if l.is_closed()]:
+                stale = self._async_clients.pop(dead, None)
+                if stale is not None:
+                    try:
+                        stale.close()
+                    except Exception:
+                        pass
+            client = _build_async_client(Config.MONGODB_URI())
+            self._async_clients[loop] = client
+        return client
+
+    def get_async_db(self):
+        return self.get_async_client()[str(Config.MONGO_DATABASE_NAME())]
+
+    def reset_async_client(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        stale = self._async_clients.pop(loop, None)
+        if stale is not None:
+            try:
+                stale.close()
+            except Exception:
+                pass
 
 
 REPOSITORY = Repository()
@@ -115,6 +182,19 @@ class IndexSpec(TypedDict, total=False):
     weights: Dict[str, int]
 
 
+class _CollectionProperty:
+    """Descriptor that resolves the (sync) pymongo collection lazily.
+
+    Kept so that ``Entity.collection`` / ``instance.collection`` keep working for
+    external callers, while never binding a concrete collection (and thus never
+    connecting) at decoration/import time. Works for both class and instance
+    access.
+    """
+
+    def __get__(self, obj, objtype=None):
+        return (objtype or type(obj)).get_collection()
+
+
 class BaseEntity(BaseModel):
     id: str = Field(
         default_factory=lambda: str(uuid4()),
@@ -129,7 +209,9 @@ class BaseEntity(BaseModel):
     __indexes__: Optional[List[IndexSpec]] = None
 
     def __init__(self, **data) -> None:
-        if not hasattr(self.__class__, "collection"):
+        # Check __collection_name__ (a plain attr set by @entity) rather than
+        # `collection` (now a lazy descriptor whose access would connect).
+        if not hasattr(self.__class__, "__collection_name__"):
             raise Exception(
                 "collection is not defined... did you forget to decorate the class with @metadata_entity?"
             )
@@ -183,27 +265,22 @@ class BaseEntity(BaseModel):
             callbacks.append(callback)
 
     def _get_self_collection(self) -> Collection:
-        return self.collection
+        return self.get_collection()
 
     @classmethod
     def get_collection(cls) -> Collection:
-        collection = None
-        _cls = cls
-        while _cls and collection is None:
-            collection = getattr(cls, "collection", None)
-            if collection is not None:
-                return collection
-            _cls = _cls.__base__ if issubclass(_cls.__base__, BaseEntity) else None
+        # Read the name first so an undecorated class raises AttributeError
+        # before REPOSITORY.mongo_db would trigger a connection.
+        name = cls.__collection_name__
+        return REPOSITORY.mongo_db[name]
 
     @classmethod
-    def get_async_collection(cls, force_refresh=True) -> AsyncIOMotorCollection:
-        if cls.acollection is None or force_refresh:
-            # if the collection has not been initialized in wrong event loop, it needs to be reinitialized
-            mongo_client = AsyncIOMotorClient(Config.MONGODB_URI())
-            db = mongo_client[str(Config.MONGO_DATABASE_NAME())]
-            cls.acollection = db[cls.__collection_name__]
-
-        return cls.acollection
+    def get_async_collection(cls, force_refresh: bool = False) -> AsyncIOMotorCollection:
+        # The async client is cached per running event loop (see Repository).
+        # force_refresh drops the current loop's client and rebuilds it.
+        if force_refresh:
+            REPOSITORY.reset_async_client()
+        return REPOSITORY.get_async_db()[cls.__collection_name__]
 
     def get_id(self) -> str:
         return self.id
@@ -239,7 +316,11 @@ class BaseEntity(BaseModel):
 
     def _prepare_save(self):
         _exclude_fields = []
-        payload = self.model_dump(mode="json", exclude=_exclude_fields)
+        # mode="python", not "json": BSON has its own date type, and json mode
+        # would stringify every datetime on the way in. Stored as strings they
+        # stop comparing and sorting as dates, so range queries and sorted
+        # indexes silently return the wrong rows.
+        payload = self.model_dump(mode="python", exclude=_exclude_fields)
         _id = payload.pop("id", None) or self.get_id()
         if not _id:
             raise Exception(
@@ -315,7 +396,7 @@ class BaseEntity(BaseModel):
         if tenant_id != "*":
             filter["tenant_id"] = tenant_id
 
-        return cls.collection.delete_one(filter).deleted_count == 1
+        return cls.get_collection().delete_one(filter).deleted_count == 1
 
     @classmethod
     def get(
@@ -330,7 +411,7 @@ class BaseEntity(BaseModel):
             filter["tenant_id"] = tenant_id
         if namespace:
             filter["namespace"] = namespace
-        data = cls.collection.find_one(filter)
+        data = cls.get_collection().find_one(filter)
         if not data and raise_not_found:
             raise Exception(
                 f"Entity {cls.__name__} with id {id} not found for tenant {tenant_id}"
@@ -391,7 +472,7 @@ class BaseEntity(BaseModel):
         if limit:
             extra["limit"] = limit
 
-        return cls.collection.count_documents(_filter, **extra)
+        return cls.get_collection().count_documents(_filter, **extra)
 
     @classmethod
     async def acount(cls, tenant_id: str = "*", filter: dict = None, limit=None) -> int:
@@ -589,18 +670,12 @@ def entity(
     collection_name: str, version_field: str = None, tracked_fields: List[str] = None
 ):
     def decorator(cls: Type[T]) -> Type[T]:
-        if Config.MONGODB_URI() is None:
-            raise Exception(
-                "MONGODB_URI is not set in the environment variables. Please set it to connect to MongoDB."
-            )
-        if Config.MONGO_DATABASE_NAME() is None:
-            raise Exception(
-                "MONGO_DATABASE_NAME is not set in the environment variables. Please set it to connect to MongoDB."
-            )
         cls.__collection_name__ = collection_name
-        cls.collection = REPOSITORY.mongo_db[collection_name]
+        # Lazy: resolves REPOSITORY.mongo_db[collection_name] on access, so
+        # decoration opens no connection and needs no env yet (env is validated
+        # at first DB use). Env-less imports before load_dotenv() are safe.
+        cls.collection = _CollectionProperty()
 
-        cls.acollection = None
         if "id" in cls.model_fields:
             cls.has_id = True
         else:
